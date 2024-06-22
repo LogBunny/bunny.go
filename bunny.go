@@ -3,6 +3,8 @@ package bunny
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -25,100 +27,25 @@ type LogBunnyLogger struct {
 }
 
 // LogHandler middleware catches all errors and sends them to the specified URL
-func (logger *LogBunnyLogger) LogHandler(c *fiber.Ctx) error {
-	defer func() {
-		if r := recover(); r != nil {
-			var errMessage string
-			switch r := r.(type) {
-			case string:
-				errMessage = r
-			case error:
-				errMessage = r.Error()
-			default:
-				errMessage = "unknown error"
-			}
+func (logger *LogBunnyLogger) LogHandler(c *fiber.Ctx, err error) error {
+	code := fiber.StatusInternalServerError
 
-			status := fiber.StatusInternalServerError
-
-			errorDetails := LogDetails{
-				Level: "error",
-				Data: map[string]interface{}{
-					"error":  errMessage,
-					"path":   c.Path(),
-					"status": status,
-				},
-				Timestamp: time.Now().Format(time.RFC3339),
-				AppId:     logger.AppId,
-				StreamId:  logger.StreamId,
-			}
-
-			// Log error details
-			log.Printf("Error: %s, Path: %s, Status: %d\n", errMessage, c.Path(), status)
-
-			// Send error details to external server using goroutine
-			go sendDetails(errorDetails)
-
-			// Respond with an error message
-			c.Status(status).JSON(fiber.Map{
-				"error": "Internal Server Error",
-			})
-		}
-	}()
-
-	err := c.Next()
-
-	if err != nil {
-		status := c.Response().StatusCode()
-		if status == 0 {
-			status = fiber.StatusInternalServerError
-		}
-
-		errorDetails := LogDetails{
-			Level: "error",
-			Data: map[string]interface{}{
-				"error":  err.Error(),
-				"path":   c.Path(),
-				"status": status,
-			},
-			Timestamp: time.Now().Format(time.RFC3339),
-			AppId:     logger.AppId,
-			StreamId:  logger.StreamId,
-		}
-
-		// Log error details
-		log.Printf("Error: %s, Path: %s, Status: %d\n", err.Error(), c.Path(), status)
-
-		// Send error details to external server using goroutine
-		go sendDetails(errorDetails)
-
-		// Respond with the appropriate status and error message
-		return c.Status(status).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+	var e *fiber.Error
+	if errors.As(err, &e) {
+		code = e.Code
 	}
-
-	// Check for 4xx and 5xx status codes
-	status := c.Response().StatusCode()
-	if status >= 400 {
-		errorDetails := LogDetails{
-			Level: "error",
-			Data: map[string]interface{}{
-				"error":  http.StatusText(status),
-				"path":   c.Path(),
-				"status": status,
-			},
-			Timestamp: time.Now().Format(time.RFC3339),
-			AppId:     logger.AppId,
-			StreamId:  logger.StreamId,
-		}
-
-		// Log error details
-		log.Printf("Error: %s, Path: %s, Status: %d\n", http.StatusText(status), c.Path(), status)
-
-		// Send error details to external server using goroutine
-		go sendDetails(errorDetails)
+	details := LogDetails{
+		Level: "error",
+		Data: map[string]interface{}{
+			"error":  err.Error(),
+			"status": code,
+		},
+		Timestamp: time.Now().GoString(),
+		AppId:     logger.AppId,
+		StreamId:  logger.StreamId,
 	}
-
+	fmt.Println(err)
+	go sendDetails(details)
 	return nil
 }
 
@@ -142,3 +69,20 @@ func sendDetails(details LogDetails) {
 		log.Printf("Failed to send error details, status code: %d", resp.StatusCode)
 	}
 }
+
+/*
+func main() {
+	logger := LogBunnyLogger{AppId: "2345", StreamId: "12345"}
+	app := fiber.New(fiber.Config{
+		ErrorHandler: logger.LogHandler,
+	})
+
+	// Define a route for the "Hello, World!" endpoint
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("Hello, World!")
+	})
+
+	// Start the server on port 3000
+	app.Listen(":3000")
+}
+*/
